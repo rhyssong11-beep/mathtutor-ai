@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MathTutor AI - 수학 문제 유사 기출 추천 비서</title>
+    
+    <!-- 1. 스타일시트 및 아이콘 라이브러리 연동 (프리미엄 라이트 테마) -->
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- 2. Supabase 클라이언트 CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+
+    <!-- 3. 헤더 영역 (상단 타이틀 및 설정 톱니바퀴) -->
+    <header>
+        <div class="logo">
+            <i class="fa-solid fa-graduation-cap"></i>
+            MathTutor <span>AI</span>
+        </div>
+        <div class="config-trigger" id="configTrigger" title="설정(API Key 입력)">
+            <i class="fa-solid fa-gear"></i>
+        </div>
+    </header>
+
+    <!-- 4. 탭 콘텐츠 영역 -->
+    
+    <!-- 4-1. [홈 탭] 문제 업로드 및 추천 영역 -->
+    <main class="tab-content active" id="homeTabSection">
+        <!-- [좌측] 문제 업로드 및 AI 분석 영역 -->
+        <section class="glass-panel">
+            <h2><i class="fa-solid fa-circle-arrow-up"></i> 내 문제 올리기</h2>
+            
+            <div class="upload-zone" id="uploadZone">
+                <i class="fa-regular fa-image upload-icon"></i>
+                <div class="upload-text">
+                    문제를 찍은 사진을 **여기로 끌어다 놓으세요**<br>
+                    또는 클릭해서 파일을 선택하세요.
+                </div>
+                <input type="file" id="fileInput" accept="image/*" style="display: none;">
+            </div>
+            
+            <div class="preview-container" id="previewContainer">
+                <button class="remove-btn" id="removeBtn" title="지우기"><i class="fa-solid fa-xmark"></i></button>
+                <img src="" alt="미리보기" class="preview-img" id="previewImg">
+            </div>
+            
+            <button class="btn-primary" id="analyzeBtn" disabled>
+                <i class="fa-solid fa-magnifying-glass-chart"></i> 유사 기출문제 찾기
+            </button>
+            
+            <div class="loading-box" id="loadingBox">
+                <div class="spinner"></div>
+                <div class="upload-text" style="color: var(--neon-purple);">
+                    인공지능 비서가 문제 속 수학 개념을 분석하고 있습니다...
+                </div>
+            </div>
+            
+            <div id="resultTagsArea" style="display: none; margin-top: 1rem;">
+                <h3 style="font-size: 1.1rem; margin-bottom: 0.5rem; color: var(--neon-purple);">
+                    <i class="fa-solid fa-tags"></i> 문제 분석 개념 태그
+                </h3>
+                <div class="tag-container" id="uploadedTags"></div>
+            </div>
+        </section>
+
+        <!-- [우측] 닮은꼴 기출문제 추천 영역 -->
+        <section class="glass-panel">
+            <h2><i class="fa-solid fa-wand-magic-sparkles"></i> 닮은꼴 기출문제</h2>
+            
+            <div id="emptyMessage" style="text-align: center; padding: 4rem 2rem; color: var(--text-secondary);">
+                <i class="fa-solid fa-database" style="font-size: 3rem; margin-bottom: 1.5rem; color: rgba(123,44,191,0.15);"></i>
+                <p>왼쪽에서 문제를 업로드하고 유사 기출문제 찾기를 눌러주세요.<br>1000개 기출 서가에서 닮은꼴 문제를 실시간 매칭해 드립니다.</p>
+            </div>
+            
+            <div class="recommend-list" id="recommendList" style="display: none;"></div>
+        </section>
+    </main>
+
+    <!-- 4-2. [기출문제 라이브러리 탭] 전체 기출문제 조회 영역 -->
+    <main class="tab-content" id="libraryTabSection" style="display: none; max-width: 1200px;">
+        <section class="glass-panel" style="width: 100%;">
+            <h2><i class="fa-solid fa-book-open"></i> 기출문제 보관소</h2>
+            
+            <!-- 검색 및 필터 컨트롤 바 -->
+            <div class="filter-bar">
+                <div class="search-box">
+                    <i class="fa-solid fa-magnifying-glass"></i>
+                    <input type="text" id="librarySearchInput" placeholder="시험명 또는 개념 단원을 검색하세요...">
+                </div>
+                
+                <div class="filter-chips" id="subjectFilterContainer">
+                    <button class="filter-chip active" data-subject="all">전체</button>
+                    <button class="filter-chip" data-subject="수학I">수학I</button>
+                    <button class="filter-chip" data-subject="수학II">수학II</button>
+                    <button class="filter-chip" data-subject="미적분">미적분</button>
+                    <button class="filter-chip" data-subject="확률과통계">확통</button>
+                    <button class="filter-chip" data-subject="기하">기하</button>
+                </div>
+            </div>
+
+            <!-- 기출문제 나열 그리드 -->
+            <div class="library-grid" id="libraryGrid">
+                <!-- 로딩 스피너 및 기출문제 카드가 여기에 렌더링됩니다. -->
+            </div>
+        </section>
+    </main>
+
+    <!-- 5. 하단 내비게이션 바 배너 (모바일 배너 스타일) -->
+    <nav class="bottom-nav">
+        <div class="nav-item active" id="navHomeBtn">
+            <i class="fa-solid fa-house"></i>
+            <span>홈</span>
+        </div>
+        <div class="nav-item" id="navLibraryBtn">
+            <i class="fa-solid fa-list-check"></i>
+            <span>기출문제</span>
+        </div>
+    </nav>
+
+    <!-- 6. [설정 모달창] -->
+    <div class="modal" id="configModal">
+        <div class="modal-content" style="max-width: 500px;">
+            <button class="close-modal" id="closeConfigModal"><i class="fa-solid fa-xmark"></i></button>
+            <h2 style="border-left-color: var(--neon-purple);"><i class="fa-solid fa-sliders"></i> MathTutor AI 설정</h2>
+            <div style="display: flex; flex-direction: column; gap: 1rem; margin-top: 1rem;">
+                <div class="upload-text" style="text-align: left; font-size: 0.85rem;">
+                    💡 다른 사용자가 접속할 때, 본인의 API 키를 입력해서 사용하게 할 수 있습니다. 비워둘 경우 관리자의 기본 키로 동작합니다.
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 0.35rem;">
+                    <label style="font-size: 0.85rem; color: var(--text-secondary);">Supabase URL</label>
+                    <input type="text" id="cfgSupabaseUrl" style="background:#f5f4f9; border:1px solid var(--panel-border); border-radius:8px; padding:0.6rem; color:var(--text-primary);" placeholder="https://...">
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 0.35rem;">
+                    <label style="font-size: 0.85rem; color: var(--text-secondary);">Supabase Anon Key</label>
+                    <input type="password" id="cfgSupabaseKey" style="background:#f5f4f9; border:1px solid var(--panel-border); border-radius:8px; padding:0.6rem; color:var(--text-primary);" placeholder="sb_publishable_...">
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 0.35rem;">
+                    <label style="font-size: 0.85rem; color: var(--text-secondary);">Gemini API Key</label>
+                    <input type="password" id="cfgGeminiKey" style="background:#f5f4f9; border:1px solid var(--panel-border); border-radius:8px; padding:0.6rem; color:var(--text-primary);" placeholder="AIzaSy...">
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 0.35rem;">
+                    <label style="font-size: 0.85rem; color: var(--text-secondary);">xAI (Grok) API Key</label>
+                    <input type="password" id="cfgXaiKey" style="background:#f5f4f9; border:1px solid var(--panel-border); border-radius:8px; padding:0.6rem; color:var(--text-primary);" placeholder="xai-...">
+                </div>
+                <div style="display: flex; gap: 1rem; margin-top: 1rem;">
+                    <button class="btn-primary" id="saveConfigBtn" style="padding: 0.75rem;">저장</button>
+                    <button class="btn-primary" id="resetConfigBtn" style="background:#ff5555; box-shadow:none; padding: 0.75rem; width: 120px;">초기화</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 7. [나란히 비교 및 기출 단독 상세보기 모달창] -->
+    <div class="modal" id="compareModal">
+        <div class="modal-content">
+            <button class="close-modal" id="closeCompareModal"><i class="fa-solid fa-xmark"></i></button>
+            <h2 id="modalMainTitle"><i class="fa-solid fa-code-compare"></i> 문항 정밀 비교하기</h2>
+            
+            <div class="comparison-grid" id="modalCompareGrid">
+                <div class="compare-slot">
+                    <h3 style="color: var(--neon-cyan);"><i class="fa-regular fa-image"></i> 내가 올린 문제</h3>
+                    <div class="compare-img-box">
+                        <img src="" id="compareUploadedImg" alt="내가 올린 문제">
+                    </div>
+                </div>
+                <div class="compare-slot">
+                    <h3 style="color: var(--neon-purple);" id="compareMatchTitle"><i class="fa-solid fa-graduation-cap"></i> 기출문제</h3>
+                    <div class="compare-img-box">
+                        <img src="" id="compareMatchedImg" alt="추천 기출문제">
+                    </div>
+                    <div class="tag-container" id="compareMatchedTags" style="margin-top: 1rem;"></div>
+                </div>
+            </div>
+
+            <!-- 기출문제 단독 상세보기용 레이아웃 (도서관에서 클릭했을 때 단독 표기용) -->
+            <div id="modalSingleGrid" style="display: none; flex-direction: column; align-items: center; gap: 1.5rem;">
+                <div class="compare-img-box" style="max-width: 600px; width: 100%;">
+                    <img src="" id="singleQuestionImg" alt="기출문제 상세">
+                </div>
+                <div class="tag-container" id="singleQuestionTags" style="justify-content: center;"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 8. 비즈니스 로직 자바스크립트 연동 (모듈 방식) -->
+    <script type="module" src="app.js"></script>
+</body>
+</html>

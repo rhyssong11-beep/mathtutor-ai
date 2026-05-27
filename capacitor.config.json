@@ -1,0 +1,6 @@
+{
+  "appId": "com.yunikon.mathtutor",
+  "appName": "MathTutor",
+  "webDir": ".",
+  "bundledWebRuntime": false
+}
