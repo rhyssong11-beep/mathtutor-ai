@@ -11,6 +11,7 @@ let selectedFileBase64 = null;
 let selectedFileMime = "";
 let currentConfig = getConfig();
 let supabaseClient = null;
+let guidelineText = ""; // 👴 120B 훈장님이 작성하신 수학 분류 지침서 저장소
 
 // 기출 도서관 데이터 로컬 캐싱용 저장소
 // (클라우드에서 한 번만 읽어와서 로컬에서 검색하므로 엄청 빠르고 요금이 안 나갑니다.)
@@ -134,8 +135,21 @@ async function autoLoadEnvKeys() {
     }
 }
 
+async function autoLoadGuideline() {
+    try {
+        const response = await fetch('/scripts/math_guideline.txt');
+        if (response.ok) {
+            guidelineText = await response.text();
+            console.log("👴 수학 훈장님(GPT-OSS 120b)의 분류 지침서를 웹서비스에 탑재 완료했습니다.");
+        }
+    } catch (e) {
+        console.warn("⚠️ 분류 지침서 동적 로드 실패 (기본 설정을 사용합니다):", e);
+    }
+}
+
 async function initApp() {
     await autoLoadEnvKeys();
+    await autoLoadGuideline();
     initSupabase();
     setupEventListeners();
     fillConfigForm();
@@ -426,6 +440,15 @@ async function runAnalysis() {
     try {
         console.log("🔮 1번 메인 비서 Groq (Llama 4 Scout) 호출 중...");
         tags = await callGroqVisionAPI(selectedFileBase64);
+        if (tags) {
+            const confidence = parseInt(tags.confidence) || 100;
+            const isAmbiguous = tags.is_ambiguous === true || tags.is_ambiguous === 'true';
+            if (isAmbiguous || confidence < 70) {
+                console.log(`✍️ 조수가 불확실해합니다. (확신도: ${confidence}점, 모호함: ${isAmbiguous})`);
+                console.log("👴 수학 훈장님(GPT-OSS 120b)에게 빨간펜 최종 검수를 요청합니다...");
+                tags = await callGpt120bAPI(tags);
+            }
+        }
     } catch (err) {
         console.warn("⚠️ Groq Llama 4 API 실패:", err);
     }
@@ -496,6 +519,32 @@ async function callGeminiVisionAPI(base64Data, mimeType) {
 async function callGroqVisionAPI(base64Data) {
     const url = `https://api.groq.com/openai/v1/chat/completions`;
     
+    const groqPrompt = `
+이 이미지는 고등학교 수학 시험 기출문제입니다.
+문제를 직접 풀지 말고, 이 문제의 수학적 본질을 잘 나타내는 태그(꼬리표)를 아래 JSON 형식으로 정확히 분석해서 반환해 주세요.
+
+반드시 아래 훈장님이 집필하신 '분류 지침서'를 철저히 참고하여 분류를 진행하세요.
+
+[분류 지침서]
+${guidelineText || "고등학교 수학 교육과정(수학I, 수학II, 미적분, 확률과통계, 기하) 기준에 따라 정확하게 태깅해 주세요."}
+
+출력 JSON 형식:
+{
+  "subject": "수학 과목명 (예: 수학I, 수학II, 미적분, 확률과통계, 기하 중 하나)",
+  "chapter": "구체적인 단원명 (대단원 및 중단원)",
+  "concepts": ["사용되는 핵심 공식이나 구체적인 개념 2~4개"],
+  "difficulty": "예상 난이도 및 배점 (예: 2점(하), 3점(중), 쉬운 4점(상), 어려운 4점(최상))",
+  "problem_text": "수학 문제 이미지에서 판독해 낸 수식과 한글 문제 전문(OCR)",
+  "confidence": 85,
+  "is_ambiguous": false
+}
+
+🚨 주의사항:
+1. 반드시 순수한 JSON 데이터만 한글로 출력해 주세요.
+2. \`\`\`json 이나 \`\`\` 같은 마크다운 코드 블록 기호는 절대 붙이지 말고 순수한 텍스트로만 반환하세요.
+3. 문제 외형(ㄱㄴㄷ 합답형, 빈칸 채우기 등)에 대한 태그는 유사도 비교에 전혀 의미가 없으므로 제외하세요.
+`;
+
     const response = await fetch(url, {
         method: 'POST',
         headers: {
@@ -506,7 +555,7 @@ async function callGroqVisionAPI(base64Data) {
             messages: [{
                 role: "user",
                 content: [
-                    { type: "text", text: PROMPT },
+                    { type: "text", text: groqPrompt },
                     {
                         type: "image_url",
                         image_url: {
@@ -532,6 +581,75 @@ async function callGroqVisionAPI(base64Data) {
     if (text.endsWith("```")) text = text.substring(0, text.length - 3);
     
     return JSON.parse(text.trim());
+}
+
+// GPT-OSS 120b (수학 훈장님) 최종 검수 API Direct HTTP Call
+async function callGpt120bAPI(ambiguousTags) {
+    const url = `https://api.groq.com/openai/v1/chat/completions`;
+    
+    const prompt120b = `
+너는 1200억 개의 뇌세포를 지닌 최고의 수학 훈장님이자 교육과정 설계 전문가이다.
+견습생 조수 비서가 고등학교 수학 기출문제 이미지로부터 추출한 아래 수학 문제의 텍스트 전문과, 조수가 임시로 지정해 둔 꼬리표(태그) 정보가 있다.
+
+조수가 확신하지 못하거나(Confidence 점수 낮음) 혹은 단원이 모호하다고 판단한 상황이다.
+이 문제의 텍스트 전문을 읽고 교육과정에 가장 정확히 부합하도록 최종 태깅 결과를 정제해서 다시 반환해 다오.
+
+[조수가 판독한 문제 텍스트 전문]
+${ambiguousTags.problem_text || '텍스트 판독 실패'}
+
+[조수가 임시로 붙여둔 꼬리표]
+- 과목: ${ambiguousTags.subject}
+- 단원: ${ambiguousTags.chapter}
+- 핵심 개념: ${ambiguousTags.concepts}
+- 예상 난이도: ${ambiguousTags.difficulty}
+
+출력 JSON 형식:
+{
+  "subject": "수학 과목명 (예: 수학I, 수학II, 미적분, 확률과통계, 기하 중 하나)",
+  "chapter": "구체적인 단원명 (대단원 및 중단원)",
+  "concepts": ["사용되는 핵심 공식이나 구체적인 개념 2~4개"],
+  "difficulty": "예상 난이도 및 배점 (예: 2점(하), 3점(중), 쉬운 4점(상), 어려운 4점(최상))"
+}
+
+🚨 주의사항:
+1. 반드시 순수한 JSON 데이터만 한글로 출력해 주세요.
+2. \`\`\`json 이나 \`\`\` 같은 마크다운 코드 블록 기호는 절대 붙이지 말고 순수한 텍스트로만 반환하세요.
+`;
+
+    const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${currentConfig.xaiApiKey}`
+        },
+        body: JSON.stringify({
+            messages: [{
+                role: "user",
+                content: prompt120b
+            }],
+            model: "openai/gpt-oss-120b",
+            temperature: 0.2
+        })
+    });
+    
+    if (!response.ok) {
+        throw new Error("120b API HTTP Error");
+    }
+    
+    const result = await response.json();
+    let text = result.choices[0].message.content.trim();
+    
+    if (text.startsWith("```json")) text = text.substring(7);
+    if (text.startsWith("```")) text = text.substring(3);
+    if (text.endsWith("```")) text = text.substring(0, text.length - 3);
+    
+    const finalTags = JSON.parse(text.trim());
+    finalTags.problem_text = ambiguousTags.problem_text || "";
+    finalTags.confidence = 100;
+    finalTags.is_ambiguous = false;
+    
+    console.log("👴 [3단계 훈장님 최종 판정 완료]", finalTags);
+    return finalTags;
 }
 
 // 내 문제 분석 태그 렌더링

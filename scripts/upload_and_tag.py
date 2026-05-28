@@ -39,17 +39,37 @@ groq_client = OpenAI(
 )
 
 # 3. AI 분석을 위한 프롬프트 (정밀 꼬리표 추출 지침서)
-PROMPT = """
+def load_math_guideline():
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "math_guideline.txt")
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return f.read().strip()
+        except Exception as e:
+            print(f"⚠️ 지침서 로드 중 오류 발생: {e}")
+    return "고등학교 수학 교육과정(수학I, 수학II, 미적분, 확률과통계, 기하) 기준에 따라 정확하게 태깅해 주세요."
+
+GUIDELINE_TEXT = load_math_guideline()
+
+PROMPT = f"""
 이 이미지는 고등학교 수학 시험 기출문제입니다.
 문제를 직접 풀지 말고, 이 문제의 수학적 본질을 잘 나타내는 태그(꼬리표)를 아래 JSON 형식으로 정확히 분석해서 반환해 주세요.
 
+반드시 아래 훈장님이 집필하신 '분류 지침서'를 철저히 참고하여 분류를 진행하세요.
+
+[분류 지침서]
+{GUIDELINE_TEXT}
+
 출력 JSON 형식:
-{
+{{
   "subject": "수학 과목명 (예: 수학I, 수학II, 미적분, 확률과통계, 기하 중 하나)",
   "chapter": "구체적인 단원명 (대단원 및 중단원)",
   "concepts": ["사용되는 핵심 공식이나 구체적인 개념 2~4개"],
-  "difficulty": "예상 난이도 및 배점 (예: 2점(하), 3점(중), 쉬운 4점(상), 어려운 4점(최상))"
-}
+  "difficulty": "예상 난이도 및 배점 (예: 2점(하), 3점(중), 쉬운 4점(상), 어려운 4점(최상))",
+  "problem_text": "수학 문제 이미지에서 판독해 낸 수식과 한글 문제 전문(OCR)",
+  "confidence": 85,  // 분류에 대한 조수 본인의 확신도 점수 (0~100 사이의 정수)
+  "is_ambiguous": false  // 단원이 매우 모호하거나 이미지가 뭉개져 훈장님의 2차 정밀 검수가 필요한지 여부 (true/false)
+}}
 
 🚨 주의사항:
 1. 반드시 순수한 JSON 데이터만 한글로 출력해 주세요.
@@ -124,6 +144,72 @@ def get_math_tags_via_groq(image_path):
         print(f"⚠️ Groq 태깅 일시 실패: {e}")
         return None
 
+def review_tags_via_gpt120b(ambiguous_tags):
+    """3단계: 훈장님(GPT-OSS 120b)이 조수가 적어낸 불확실한 태그와 판독한 텍스트를 기반으로 최종 검수를 내립니다."""
+    try:
+        PROMPT_120B = f"""
+너는 1200억 개의 뇌세포를 지닌 최고의 수학 훈장님이자 교육과정 설계 전문가이다.
+견습생 조수 비서가 고등학교 수학 기출문제 이미지로부터 추출한 아래 수학 문제의 텍스트 전문과, 조수가 임시로 지정해 둔 꼬리표(태그) 정보가 있다.
+
+조수가 확신하지 못하거나(Confidence 점수 낮음) 혹은 단원이 모호하다고 판단한 상황이다.
+이 문제의 텍스트 전문을 읽고 교육과정에 가장 정확히 부합하도록 최종 태깅 결과를 정제해서 다시 반환해 다오.
+
+[조수가 판독한 문제 텍스트 전문]
+{ambiguous_tags.get('problem_text', '텍스트 판독 실패')}
+
+[조수가 임시로 붙여둔 꼬리표]
+- 과목: {ambiguous_tags.get('subject')}
+- 단원: {ambiguous_tags.get('chapter')}
+- 핵심 개념: {ambiguous_tags.get('concepts')}
+- 예상 난이도: {ambiguous_tags.get('difficulty')}
+
+출력 JSON 형식:
+{{
+  "subject": "수학 과목명 (예: 수학I, 수학II, 미적분, 확률과통계, 기하 중 하나)",
+  "chapter": "구체적인 단원명 (대단원 및 중단원)",
+  "concepts": ["사용되는 핵심 공식이나 구체적인 개념 2~4개"],
+  "difficulty": "예상 난이도 및 배점 (예: 2점(하), 3점(중), 쉬운 4점(상), 어려운 4점(최상))"
+}}
+
+🚨 주의사항:
+1. 반드시 순수한 JSON 데이터만 한글로 출력해 주세요.
+2. ```json 이나 ``` 같은 마크다운 코드 블록 기호는 절대 붙이지 말고 순수한 텍스트로만 반환하세요.
+"""
+        chat_completion = groq_client.chat.completions.create(
+            messages=[
+                {
+                    "role": "user",
+                    "content": PROMPT_120B
+                }
+            ],
+            model="openai/gpt-oss-120b",
+            temperature=0.2
+        )
+        
+        text = chat_completion.choices[0].message.content.strip()
+        
+        if text.startswith("```json"):
+            text = text[7:]
+        if text.startswith("```"):
+            text = text[3:]
+        if text.endswith("```"):
+            text = text[:-3]
+            
+        final_tags = json.loads(text.strip())
+        
+        # 조수의 판독 텍스트 전문 및 메타 데이터를 최종 태그 객체에 상속합니다.
+        final_tags["problem_text"] = ambiguous_tags.get("problem_text", "")
+        final_tags["confidence"] = 100
+        final_tags["is_ambiguous"] = False
+        
+        print("👴 [3단계 훈장님 최종 판정 완료]")
+        print(f"   수정 전: {ambiguous_tags.get('subject')} > {ambiguous_tags.get('chapter')} | 난이도: {ambiguous_tags.get('difficulty')}")
+        print(f"   수정 후: {final_tags.get('subject')} > {final_tags.get('chapter')} | 난이도: {final_tags.get('difficulty')}")
+        return final_tags
+    except Exception as e:
+        print(f"⚠️ 훈장님 최종 검수 실패로 인해 조수의 임시 태그를 그대로 유지합니다: {e}")
+        return ambiguous_tags
+
 def upload_image_to_storage_by_id(file_path, question_id):
     """이미지 파일을 영문 고유 ID명(UUID.png)으로 Storage 버킷 'question-images'에 업로드합니다."""
     storage_path = f"{question_id}.png"
@@ -178,6 +264,16 @@ def process_single_question_with_retry(file_path):
             print("🔮 1번 비서 Groq (Llama 4 Scout) 호출 중...")
             tags = get_math_tags_via_groq(file_path)
             if tags:
+                # 3단계 최종 판정 회로 가동!
+                try:
+                    confidence = int(tags.get("confidence", 100))
+                except Exception:
+                    confidence = 100
+                is_ambiguous = tags.get("is_ambiguous", False)
+                if is_ambiguous or confidence < 70:
+                    print(f"✍️ 조수가 불확실해합니다. (확신도: {confidence}점, 모호함: {is_ambiguous})")
+                    print("👴 수학 훈장님(GPT-OSS 120b)에게 빨간펜 최종 검수를 요청합니다...")
+                    tags = review_tags_via_gpt120b(tags)
                 break
                 
             # 🚨 2순위 예비 비서: Gemini 호출!
