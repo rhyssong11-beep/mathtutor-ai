@@ -57,6 +57,7 @@ const libraryTabSection = document.getElementById('libraryTabSection');
 
 // [기출 도서관 요소]
 const librarySearchInput = document.getElementById('librarySearchInput');
+const libraryCount = document.getElementById('libraryCount');
 const subjectFilterContainer = document.getElementById('subjectFilterContainer');
 const libraryGrid = document.getElementById('libraryGrid');
 
@@ -86,7 +87,55 @@ const singleQuestionImg = document.getElementById('singleQuestionImg');
 const singleQuestionTags = document.getElementById('singleQuestionTags');
 
 // 3. 앱 시작 시 초기화
-function initApp() {
+async function autoLoadEnvKeys() {
+    try {
+        const response = await fetch('/.env');
+        if (!response.ok) return;
+        const text = await response.text();
+        
+        // 간단한 .env 파서 (텍스트 줄별 분석)
+        const env = {};
+        text.split('\n').forEach(line => {
+            const trimmed = line.trim();
+            if (!trimmed || trimmed.startsWith('#')) return;
+            const parts = trimmed.split('=');
+            if (parts.length >= 2) {
+                const key = parts[0].trim();
+                const val = parts.slice(1).join('=').trim();
+                env[key] = val;
+            }
+        });
+        
+        let changed = false;
+        // 로컬 브라우저 저장소(localStorage)에 정보가 비어있을 때만 .env 파일에서 똑똑하게 가져오기
+        if (env.SUPABASE_URL && !localStorage.getItem("MATH_SUPABASE_URL")) {
+            localStorage.setItem("MATH_SUPABASE_URL", env.SUPABASE_URL);
+            changed = true;
+        }
+        if (env.SUPABASE_KEY && !localStorage.getItem("MATH_SUPABASE_KEY")) {
+            localStorage.setItem("MATH_SUPABASE_KEY", env.SUPABASE_KEY);
+            changed = true;
+        }
+        if (env.GEMINI_API_KEY && !localStorage.getItem("MATH_GEMINI_KEY")) {
+            localStorage.setItem("MATH_GEMINI_KEY", env.GEMINI_API_KEY);
+            changed = true;
+        }
+        if (env.GROQ_API_KEY && !localStorage.getItem("MATH_XAI_KEY")) {
+            localStorage.setItem("MATH_XAI_KEY", env.GROQ_API_KEY);
+            changed = true;
+        }
+        
+        if (changed) {
+            console.log("🔑 로컬 .env 설정 파일에서 비밀 열쇠들을 자동으로 읽어와 브라우저에 등록했습니다!");
+            currentConfig = getConfig();
+        }
+    } catch (e) {
+        console.log("ℹ️ 로컬 .env 자동 로드 패스 (프로덕션 환경이거나 설정 파일 없음)");
+    }
+}
+
+async function initApp() {
+    await autoLoadEnvKeys();
     initSupabase();
     setupEventListeners();
     fillConfigForm();
@@ -233,6 +282,9 @@ async function loadAllLibraryQuestions() {
         if (error) throw error;
 
         cachedLibraryQuestions = questions || [];
+        if (libraryCount) {
+            libraryCount.innerText = `(총 ${cachedLibraryQuestions.length}개)`;
+        }
         applyLibraryFilters(); // 불러온 직후 필터(기본 '전체')를 입혀 나열합니다.
     } catch (err) {
         console.error("❌ 기출문제 로드 실패:", err);
@@ -372,18 +424,18 @@ async function runAnalysis() {
     let tags = null;
     
     try {
-        console.log("🔮 1번 비서 Gemini 2.5 Flash 호출 중...");
-        tags = await callGeminiVisionAPI(selectedFileBase64, selectedFileMime);
+        console.log("🔮 1번 메인 비서 Groq (Llama 4 Scout) 호출 중...");
+        tags = await callGroqVisionAPI(selectedFileBase64);
     } catch (err) {
-        console.warn("⚠️ Gemini API 실패:", err);
+        console.warn("⚠️ Groq Llama 4 API 실패:", err);
     }
     
     if (!tags) {
         try {
-            console.log("🔄 Gemini 실패로 인한 2번 비서 xAI (Grok) 호출 중...");
-            tags = await callXaiVisionAPI(selectedFileBase64);
+            console.log("🔄 Groq 실패로 인한 2번 예비 비서 Gemini 2.5 Flash 호출 중...");
+            tags = await callGeminiVisionAPI(selectedFileBase64, selectedFileMime);
         } catch (err) {
-            console.error("❌ xAI API 호출도 실패했습니다:", err);
+            console.error("❌ Gemini API 호출도 실패했습니다:", err);
         }
     }
     
@@ -440,9 +492,9 @@ async function callGeminiVisionAPI(base64Data, mimeType) {
     return JSON.parse(text.trim());
 }
 
-// xAI (Grok) API Direct HTTP Call
-async function callXaiVisionAPI(base64Data) {
-    const url = `https://api.x.ai/v1/chat/completions`;
+// Groq (Llama 4 Scout Vision) API Direct HTTP Call
+async function callGroqVisionAPI(base64Data) {
+    const url = `https://api.groq.com/openai/v1/chat/completions`;
     
     const response = await fetch(url, {
         method: 'POST',
@@ -463,17 +515,17 @@ async function callXaiVisionAPI(base64Data) {
                     }
                 ]
             }],
-            model: "grok-2-vision-1212",
+            model: "meta-llama/llama-4-scout-17b-16e-instruct",
             temperature: 0.1
         })
     });
     
     if (!response.ok) {
-        throw new Error("xAI HTTP Error");
+        throw new Error("Groq HTTP Error");
     }
     
     const result = await response.json();
-    let text = result.choices[0].message.content.trim();
+    let text = result.choices[0].message.content.strip ? result.choices[0].message.content.strip() : result.choices[0].message.content.trim();
     
     if (text.startsWith("```json")) text = text.substring(7);
     if (text.startsWith("```")) text = text.substring(3);
